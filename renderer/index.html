@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Claude 桌面 Agent</title>
+  <title>Claude Code++</title>
   <style>
     :root {
       --bg: #faf9f5;
@@ -40,7 +40,8 @@
     .brand { padding: 16px 16px 10px; display: flex; align-items: center; gap: 9px; }
     .brand .logo {
       width: 26px; height: 26px; border-radius: 7px; background: var(--accent);
-      display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px;
+      display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 13px;
+      letter-spacing: -1px;
     }
     .brand .name { font-weight: 650; font-size: 15px; letter-spacing: .2px; }
 
@@ -225,7 +226,7 @@
 <body>
   <!-- ============ 侧栏 ============ -->
   <aside class="sidebar">
-    <div class="brand"><div class="logo">✳</div><div class="name">Claude 桌面 Agent</div></div>
+    <div class="brand"><div class="logo">++</div><div class="name">Claude Code++</div></div>
     <button class="new-chat" id="new-chat"><span>＋</span><span>新建对话</span></button>
     <div class="conv-section-label">对话</div>
     <div class="conv-list" id="conv-list"></div>

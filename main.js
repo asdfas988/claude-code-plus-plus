@@ -515,7 +515,7 @@ function stopWorkflow() { if (wf.active) { const cid = wf.convId; wf.active = fa
 // ===================== 窗口 =====================
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1080, height: 780, minWidth: 820, minHeight: 560, title: 'Claude 桌面 Agent', backgroundColor: '#faf9f5',
+    width: 1080, height: 780, minWidth: 820, minHeight: 560, title: 'Claude Code++', backgroundColor: '#faf9f5',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
