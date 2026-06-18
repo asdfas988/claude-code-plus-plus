@@ -1,28 +1,29 @@
-# Create a "Claude Code++" shortcut on the Desktop (launches hidden, no console window).
+# Create a "Claude Code++" shortcut on the Desktop.
+# It points directly at electron.exe (a normal GUI program) -- no hidden
+# PowerShell, no console window, and far less likely to trip antivirus.
 # Usage: right-click this file -> Run with PowerShell
 #    or: powershell -ExecutionPolicy Bypass -File create-shortcut.ps1
+# Run this AFTER `npm install` (electron.exe must already exist).
 
 $ErrorActionPreference = 'Stop'
 
 $projectDir = $PSScriptRoot
+$electron   = Join-Path $projectDir 'node_modules\electron\dist\electron.exe'
 $desktop    = [Environment]::GetFolderPath('Desktop')
 $lnkPath    = Join-Path $desktop 'Claude Code++.lnk'
 
-# Launch detached + hidden: the launcher fires npm start as an independent
-# process and exits immediately, so the app keeps running on its own.
-$target    = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$arguments = "-WindowStyle Hidden -NoProfile -Command ""Start-Process npm -ArgumentList 'start' -WorkingDirectory '$projectDir' -WindowStyle Hidden"""
+if (-not (Test-Path $electron)) {
+  Write-Host "[!] electron.exe not found. Run 'npm install' first, then re-run this script."
+  exit 1
+}
 
 $shell = New-Object -ComObject WScript.Shell
 $sc = $shell.CreateShortcut($lnkPath)
-$sc.TargetPath       = $target
-$sc.Arguments        = $arguments
+$sc.TargetPath       = $electron      # launch the app directly
+$sc.Arguments        = '.'            # load the app from its project dir
 $sc.WorkingDirectory = $projectDir
+$sc.IconLocation     = $electron
 $sc.Description       = 'Claude Code++'
-
-# Use Electron icon if dependencies are installed
-$icon = Join-Path $projectDir 'node_modules\electron\dist\electron.exe'
-if (Test-Path $icon) { $sc.IconLocation = $icon }
-
 $sc.Save()
+
 Write-Host "[OK] Desktop shortcut created: $lnkPath"

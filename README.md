@@ -62,9 +62,11 @@ npm start
 powershell -ExecutionPolicy Bypass -File create-shortcut.ps1
 ```
 
-> 桌面图标用的是 Electron 图标，所以请在 `npm install` **之后**再生成快捷方式。
+> 快捷方式直接指向 `node_modules\electron\dist\electron.exe`，所以请在 `npm install` **之后**再生成。
 
-两种方式都以**独立进程**启动 App —— 关闭命令行窗口不会再连带退出程序。
+两种方式都直接拉起 Electron，以**独立进程**运行 —— 无命令行黑窗口，关闭任何窗口都不会退出 App。
+
+> 若杀毒软件（如火绒）拦截"脚本创建快捷方式"，放行即可；快捷方式只是指向本地 `electron.exe`，不含任何隐藏脚本。也可手动建：右键 `node_modules\electron\dist\electron.exe` → 发送到桌面快捷方式，再把"目标"参数后面加一个 `.`。
 
 ## 说明
 
