@@ -51,6 +51,19 @@ npm start
 > **关于 `npm install` 慢 / 卡在下载 Electron**：仓库自带 `.npmrc`，已把依赖和 Electron 预编译二进制都指向**国内淘宝镜像**，换设备 clone 后直接 `npm install` 即可，无需配置环境变量。
 > 如果你在境外、希望走官方源，删掉 `.npmrc` 即可。
 
+### 更省事的启动方式（装完依赖后）
+
+`npm install` 跑完一次后，下次启动不用再敲命令，二选一：
+
+- **双击 `start.bat`** —— 直接启动（首次会自动 `npm install`）。
+- **桌面快捷方式** —— 运行一次 `create-shortcut.ps1`（右键 → 用 PowerShell 运行），桌面会出现「Claude Code++」图标，之后双击图标即开，**不弹黑窗口**。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File create-shortcut.ps1
+```
+
+> 桌面图标用的是 Electron 图标，所以请在 `npm install` **之后**再生成快捷方式。
+
 ## 说明
 
 - 平台：目前面向 Windows。
