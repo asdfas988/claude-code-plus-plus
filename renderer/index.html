@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claude 桌面 Agent</title>
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --sidebar: #f0eee6;
+      --panel: #ffffff;
+      --border: #e6e3d9;
+      --border-soft: #eceadf;
+      --text: #2b2a27;
+      --muted: #76746c;
+      --faint: #9a988e;
+      --accent: #d97757;
+      --accent-press: #c15f3c;
+      --accent-soft: #f6e9e2;
+      --user-bubble: #ece9df;
+      --tool: #b8742e;
+      --tool-bg: #f6efe3;
+      --ok: #5a8a5e;
+      --danger: #b4543e;
+      color-scheme: light;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: "Segoe UI", -apple-system, system-ui, "Microsoft YaHei", sans-serif;
+      background: var(--bg); color: var(--text); display: flex; font-size: 14px;
+    }
+    button { font-family: inherit; cursor: pointer; }
+
+    /* ============ 侧栏 ============ */
+    .sidebar {
+      width: 264px; min-width: 264px; background: var(--sidebar);
+      border-right: 1px solid var(--border); display: flex; flex-direction: column; height: 100vh;
+    }
+    .brand { padding: 16px 16px 10px; display: flex; align-items: center; gap: 9px; }
+    .brand .logo {
+      width: 26px; height: 26px; border-radius: 7px; background: var(--accent);
+      display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px;
+    }
+    .brand .name { font-weight: 650; font-size: 15px; letter-spacing: .2px; }
+
+    .new-chat {
+      margin: 6px 12px 10px; padding: 9px 12px; border: 1px solid var(--border);
+      background: var(--panel); color: var(--text); border-radius: 9px;
+      display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 550;
+      transition: background .12s;
+    }
+    .new-chat:hover { background: #fffdf8; border-color: var(--accent); color: var(--accent-press); }
+
+    .conv-section-label { padding: 6px 18px; font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+    .plugin-head { display: flex; align-items: center; justify-content: space-between; padding-right: 12px; }
+    .plugin-head button { background: none; border: none; color: var(--accent); font-size: 16px; cursor: pointer; line-height: 1; padding: 0 4px; }
+    .plugin-head button:hover { color: var(--accent-press); }
+    .conv-list { flex: 1; overflow-y: auto; padding: 0 8px; min-height: 40px; }
+    .plugin-list { flex: 0 0 auto; max-height: 30vh; }
+    .conv-item {
+      display: flex; align-items: center; gap: 6px; padding: 8px 10px; margin: 1px 0;
+      border-radius: 8px; cursor: pointer; color: var(--text); position: relative;
+    }
+    .conv-item:hover { background: #e7e4d8; }
+    .conv-item.active { background: #e3dfd0; }
+    .conv-title { flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .conv-del {
+      opacity: 0; border: none; background: transparent; color: var(--faint); font-size: 15px;
+      width: 22px; height: 22px; border-radius: 6px; line-height: 1; flex: none;
+    }
+    .conv-item:hover .conv-del { opacity: 1; }
+    .conv-del:hover { background: #d8d3c2; color: var(--danger); }
+    .empty-hint { padding: 14px 18px; font-size: 12.5px; color: var(--faint); }
+
+    .sidebar-nav { border-top: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+    .nav-btn {
+      display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: none;
+      background: transparent; color: var(--muted); border-radius: 8px; font-size: 13.5px; text-align: left;
+    }
+    .nav-btn:hover { background: #e7e4d8; color: var(--text); }
+    .nav-btn.active { background: var(--accent-soft); color: var(--accent-press); font-weight: 600; }
+    .nav-btn .ic { width: 18px; text-align: center; }
+
+    /* ============ 主区 ============ */
+    .main { flex: 1; display: flex; flex-direction: column; height: 100vh; min-width: 0; }
+    .topbar {
+      height: 52px; min-height: 52px; border-bottom: 1px solid var(--border-soft);
+      display: flex; align-items: center; padding: 0 20px; gap: 12px; background: var(--bg);
+    }
+    .topbar .title { font-weight: 600; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge {
+      margin-left: auto; font-size: 12px; color: var(--muted); background: var(--panel);
+      border: 1px solid var(--border); padding: 4px 11px; border-radius: 20px; white-space: nowrap;
+      max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    .page { flex: 1; display: none; flex-direction: column; min-height: 0; }
+    .page.active { display: flex; }
+
+    /* 对话 */
+    #log { flex: 1; overflow-y: auto; padding: 26px 0; }
+    .msg-wrap { max-width: 760px; margin: 0 auto; padding: 0 28px; }
+    .msg { margin-bottom: 22px; line-height: 1.62; white-space: pre-wrap; word-break: break-word; }
+    .msg .who { font-size: 12px; color: var(--faint); margin-bottom: 5px; font-weight: 600; }
+    .msg.user .bubble { background: var(--user-bubble); border-radius: 14px; padding: 11px 15px; display: inline-block; }
+    .msg.assistant .body { color: var(--text); }
+    .pill {
+      display: inline-flex; align-items: center; gap: 7px; background: var(--tool-bg); color: var(--tool);
+      border: 1px solid #ecdcc2; border-radius: 9px; padding: 7px 12px; font-size: 12.5px; margin-bottom: 8px;
+    }
+    .pill.result { background: #eef4ec; color: var(--ok); border-color: #d8e6d6; }
+    .sys-line { color: var(--faint); font-size: 12px; font-style: italic; margin-bottom: 10px; }
+    .welcome { max-width: 540px; margin: 12vh auto 0; text-align: center; color: var(--muted); }
+    .welcome h2 { color: var(--text); font-weight: 650; font-size: 21px; margin-bottom: 8px; }
+
+    .composer { border-top: 1px solid var(--border-soft); padding: 14px 0 18px; }
+    .composer-inner { max-width: 760px; margin: 0 auto; padding: 0 28px; display: flex; gap: 10px; align-items: flex-end; }
+    #input {
+      flex: 1; resize: none; min-height: 52px; max-height: 180px; background: var(--panel);
+      border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; font-size: 14px;
+      font-family: inherit; color: var(--text); line-height: 1.5;
+    }
+    #input:focus { outline: none; border-color: var(--accent); }
+    #send {
+      width: 44px; height: 44px; border-radius: 12px; border: none; background: var(--accent); color: #fff;
+      font-size: 18px; display: grid; place-items: center; flex: none;
+    }
+    #send:hover { background: var(--accent-press); }
+    #send:disabled { background: #d8d3c6; cursor: not-allowed; }
+    .auto-btn { flex: none; align-self: stretch; background: var(--panel); border: 1px solid var(--border); color: var(--muted); border-radius: 12px; padding: 0 12px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+    .auto-btn:hover { border-color: var(--accent); color: var(--accent-press); }
+    .auto-btn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-press); }
+    .auto-btn.looping { background: #c0392b; border-color: #c0392b; color: #fff; }
+    /* Agent Loop 进度卡 */
+    .loop-card { max-width: 760px; margin: 8px auto; padding: 10px 14px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; background: #fffdf9; font-size: 13px; }
+    .loop-card .lc-head { font-weight: 700; color: var(--accent-press); margin-bottom: 4px; }
+    .loop-card .lc-row { color: var(--muted); margin: 2px 0; white-space: pre-wrap; }
+    .loop-card.pass { border-left-color: #2e9e5b; }
+    .loop-card.pass .lc-head { color: #2e9e5b; }
+    .loop-card.fail { border-left-color: #c0392b; }
+    .loop-iter { max-width: 760px; margin: 14px auto 4px; text-align: center; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .05em; }
+    .loop-iter span { background: var(--accent-soft); color: var(--accent-press); padding: 3px 12px; border-radius: 20px; }
+    /* 顶栏 Agent 选择器 */
+    .agent-pick { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+    .agent-pick select { border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px; background: var(--panel); font-size: 12.5px; color: var(--ink); max-width: 200px; }
+    /* Agent 管理页 */
+    .ag-plugins { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 4px 0 8px; }
+    .ag-plugins label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); font-weight: 400; }
+    .agent-card { display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; background: var(--panel); }
+    .agent-card .ac-emoji { font-size: 22px; line-height: 1.3; }
+    .agent-card .ac-main { flex: 1; min-width: 0; }
+    .agent-card .ac-name { font-weight: 700; font-size: 14px; }
+    .agent-card .ac-desc { color: var(--muted); font-size: 12.5px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .agent-card .ac-meta { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+    .agent-card .ac-acts { display: flex; gap: 6px; flex: none; }
+    /* 工作流编排器 */
+    .wf-stage { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--panel); }
+    .wf-stage-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .wf-stage-head input[type=text] { flex: 1; }
+    .wf-stage-head .par { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+    .wf-task { display: flex; gap: 8px; margin-bottom: 6px; align-items: flex-start; }
+    .wf-task select { flex: none; width: 160px; border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; background: var(--bg); }
+    .wf-task textarea { flex: 1; resize: vertical; min-height: 38px; }
+    .wf-x { flex: none; background: none; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); width: 30px; cursor: pointer; }
+    .wf-x:hover { border-color: #c0392b; color: #c0392b; }
+    .wf-card { display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; background: var(--panel); }
+    .wf-card .wc-main { flex: 1; min-width: 0; }
+    .wf-card .wc-name { font-weight: 700; }
+    .wf-card .wc-meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .wf-card .wc-acts { display: flex; gap: 6px; flex: none; }
+    /* 运行进度卡(对话内) */
+    .wf-run-stage { max-width: 760px; margin: 14px auto 4px; text-align: center; font-size: 12px; font-weight: 700; color: var(--accent-press); }
+    .wf-run-stage span { background: var(--accent-soft); padding: 3px 12px; border-radius: 20px; }
+    .wf-run-task { max-width: 760px; margin: 6px auto; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; padding: 9px 13px; background: #fffdf9; font-size: 13px; }
+    .wf-run-task .wt-h { font-weight: 700; margin-bottom: 3px; }
+    .wf-run-task .wt-b { color: var(--ink); white-space: pre-wrap; }
+    .wf-run-task.running { border-left-color: #e0a23a; color: var(--muted); }
+
+    /* 设置类页面 */
+    .settings { flex: 1; overflow-y: auto; padding: 26px 32px; }
+    .settings-inner { max-width: 720px; margin: 0 auto; }
+    h2.sec { font-size: 13px; color: var(--muted); margin: 22px 0 12px; letter-spacing: .03em; }
+    h2.sec:first-child { margin-top: 0; }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px 16px; margin-bottom: 10px; display: flex; align-items: center; gap: 13px;
+    }
+    .card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+    .card .info { flex: 1; min-width: 0; }
+    .card .nm { font-weight: 600; font-size: 14px; }
+    .card .meta { font-size: 12px; color: var(--muted); margin-top: 3px; word-break: break-all; }
+    .tag { font-size: 10px; background: #efece1; color: var(--muted); padding: 1px 7px; border-radius: 8px; margin-left: 7px; }
+    .radio { width: 17px; height: 17px; accent-color: var(--accent); }
+
+    .btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 550; }
+    .btn:hover { border-color: var(--accent); color: var(--accent-press); }
+    .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn.primary:hover { background: var(--accent-press); color: #fff; }
+    .btn.danger { color: var(--danger); }
+    .btn.danger:hover { border-color: var(--danger); background: #fbf0ed; }
+    .btn.sm { padding: 5px 11px; font-size: 12px; }
+
+    /* 开关 */
+    .switch { position: relative; width: 40px; height: 23px; flex: none; }
+    .switch input { display: none; }
+    .switch .slider { position: absolute; inset: 0; background: #d6d2c4; border-radius: 20px; transition: .15s; }
+    .switch .slider::before { content: ""; position: absolute; width: 17px; height: 17px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .15s; }
+    .switch input:checked + .slider { background: var(--accent); }
+    .switch input:checked + .slider::before { transform: translateX(17px); }
+
+    .form { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+    .form label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px; }
+    .form label:first-child { margin-top: 0; }
+    .form input, .form select {
+      width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 9px 11px; font-size: 13px; color: var(--text); font-family: inherit;
+    }
+    .form input:focus, .form select:focus { outline: none; border-color: var(--accent); }
+    .row { display: flex; gap: 12px; } .row > div { flex: 1; }
+    .actions { margin-top: 16px; display: flex; gap: 10px; }
+    .hint { font-size: 11.5px; color: var(--faint); margin-top: 8px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <!-- ============ 侧栏 ============ -->
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">✳</div><div class="name">Claude 桌面 Agent</div></div>
+    <button class="new-chat" id="new-chat"><span>＋</span><span>新建对话</span></button>
+    <div class="conv-section-label">对话</div>
+    <div class="conv-list" id="conv-list"></div>
+    <div class="conv-section-label plugin-head">
+      <span>插件</span>
+      <button id="new-plugin" title="新建插件(在对话里让 Claude 造)">＋</button>
+    </div>
+    <div class="conv-list plugin-list" id="plugin-list"></div>
+    <nav class="sidebar-nav">
+      <button class="nav-btn" id="nav-evolve" title="和 App 对话,让它给自己加功能/改界面/调设计(改自己源码,git 快照可回滚)"><span class="ic">🧬</span><span>自我进化</span></button>
+      <button class="nav-btn" data-page="agents"><span class="ic">🤖</span><span>Agent 管理</span></button>
+      <button class="nav-btn" data-page="workflows"><span class="ic">👥</span><span>团队 / 工作流</span></button>
+      <button class="nav-btn" data-page="providers"><span class="ic">⚙</span><span>服务商</span></button>
+      <button class="nav-btn" data-page="plugins"><span class="ic">🧩</span><span>插件与 MCP 开关</span></button>
+    </nav>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <main class="main">
+    <div class="topbar">
+      <div class="title" id="top-title">新对话</div>
+      <span id="engine-state" class="badge" style="margin-left:12px;display:none"></span>
+      <label class="agent-pick" id="agent-pick" title="给这个对话选一个 Agent 主角(它的人设会注入整段对话)" style="margin-left:16px">
+        <span style="color:var(--muted)">主角</span>
+        <select id="agent-select"><option value="">无（默认 Claude）</option></select>
+      </label>
+      <button class="btn sm" id="evolve-rollback" title="撤销上一次自我进化(git 回滚到上个快照并重载)" style="margin-left:16px;display:none">↶ 回滚上次进化</button>
+      <div class="badge" id="active-badge" style="margin-left:auto">服务商:默认</div>
+    </div>
+
+    <!-- 对话页 -->
+    <section class="page active" id="page-chat">
+      <div id="log"></div>
+      <div class="composer">
+        <div class="composer-inner">
+          <textarea id="input" placeholder="给 Claude 发消息……(Ctrl+Enter 发送)"></textarea>
+          <button id="auto-toggle" class="auto-btn" title="Agent Loop:开启后把输入当作【目标】,我会自己一轮轮推进 → 独立审查 → 独立验收判分,直到达成或到上限才停(不靠自夸完成)。再点一下=停止循环。">🔁 Loop</button>
+          <button id="send" title="发送">↑</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 服务商页 -->
+    <section class="page" id="page-providers">
+      <div class="settings"><div class="settings-inner">
+        <h2 class="sec">服务商档案（点击单选即一键切换）</h2>
+        <div id="prov-list"></div>
+        <h2 class="sec" id="prov-form-title">新增服务商</h2>
+        <div class="form">
+          <input type="hidden" id="pf-id" />
+          <label>名称</label>
+          <input id="pf-name" placeholder="例如:第三方中转 / 公司 Bedrock" />
+          <div class="row">
+            <div><label>API 端点（ANTHROPIC_BASE_URL）</label><input id="pf-baseurl" placeholder="https://…（留空＝官方）" /></div>
+            <div><label>模型（可选，ANTHROPIC_MODEL）</label><input id="pf-model" placeholder="留空＝默认" /></div>
+          </div>
+          <div class="row">
+            <div><label>密钥类型</label>
+              <select id="pf-secrettype">
+                <option value="none">无（用本机登录）</option>
+                <option value="authToken">Auth Token（中转常用）</option>
+                <option value="apiKey">API Key（官方）</option>
+              </select>
+            </div>
+            <div><label>密钥（加密存储，编辑时留空＝不修改）</label><input id="pf-secret" type="password" placeholder="••••••••" /></div>
+          </div>
+          <div class="actions"><button class="btn primary" id="pf-save">保存</button><button class="btn" id="pf-reset">清空表单</button></div>
+          <div class="hint">密钥经系统 safeStorage 加密后写入本地 providers.json，界面不回显明文。</div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- 插件页:只管开关 -->
+    <section class="page" id="page-plugins">
+      <div class="settings"><div class="settings-inner">
+        <div class="hint" style="background:var(--accent-soft);border:1px solid #eccdbf;color:var(--accent-press);padding:12px 14px;border-radius:10px;margin-bottom:6px;font-size:13px">
+          💡 想新增插件?直接回到对话里对 Claude 说,例如「帮我做一个能读写文件的插件」或「帮我装个 Playwright 浏览器插件」。这里只负责开关和删除。
+        </div>
+        <h2 class="sec">已安装的插件 / MCP（开关＝启用 / 禁用）</h2>
+        <div id="mcp-list"></div>
+      </div></div>
+    </section>
+
+    <!-- Agent 管理页 -->
+    <section class="page" id="page-agents">
+      <div class="settings"><div class="settings-inner">
+        <div class="hint" style="background:var(--accent-soft);border:1px solid #eccdbf;color:var(--accent-press);padding:12px 14px;border-radius:10px;margin-bottom:6px;font-size:13px">
+          🤖 Agent = 一套人设(系统提示词)+ 可用插件 + 模型。建好后:① 在对话顶栏「主角」处选它,整段对话都用它;② 在任意对话里让 Claude「用 XX 召唤 / run_agent」把子任务交给它。<br>
+          也可以直接在对话里说「<b>帮我造一个会写 SEO 文章的 Agent</b>」,Claude 会自动建好。
+        </div>
+        <h2 class="sec">我的 Agent</h2>
+        <div id="agent-list"></div>
+        <h2 class="sec" id="agent-form-title">新建 Agent</h2>
+        <div class="form">
+          <input type="hidden" id="ag-id" />
+          <div class="row">
+            <div style="flex:none;width:90px"><label>头像 emoji</label><input id="ag-emoji" placeholder="🤖" maxlength="4" /></div>
+            <div><label>名称</label><input id="ag-name" placeholder="例如:SEO 写手 / 代码审查官 / 翻译官" /></div>
+          </div>
+          <label>系统提示词（它是谁、负责什么、风格与输出要求，越具体越好）</label>
+          <textarea id="ag-sys" rows="6" placeholder="你是一名资深 SEO 内容写手……目标关键词……输出结构……语气……" style="width:100%;resize:vertical"></textarea>
+          <div class="row">
+            <div><label>模型覆盖（可选）</label><input id="ag-model" placeholder="留空＝默认，可填 sonnet 等" /></div>
+          </div>
+          <label>可用插件（不勾＝全部可用；勾选＝只给这些 + 内置核心）</label>
+          <div id="ag-plugins" class="ag-plugins"></div>
+          <div class="actions"><button class="btn primary" id="ag-save">保存 Agent</button><button class="btn" id="ag-reset">清空表单</button></div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- 团队 / 工作流页 -->
+    <section class="page" id="page-workflows">
+      <div class="settings"><div class="settings-inner">
+        <div class="hint" style="background:var(--accent-soft);border:1px solid #eccdbf;color:var(--accent-press);padding:12px 14px;border-radius:10px;margin-bottom:6px;font-size:13px">
+          👥 工作流 = 让多个 Agent 协同。<b>阶段</b>按顺序跑，<b>阶段内任务</b>可并行。任务提示词里可用 <code>{{input}}</code>（运行时你输入的内容）和 <code>{{prev}}</code>（上一阶段的合并结果）。每个子代理用它自己被分配的插件。
+        </div>
+        <h2 class="sec">我的工作流</h2>
+        <div id="wf-list"></div>
+        <h2 class="sec" id="wf-form-title">新建工作流</h2>
+        <div class="form">
+          <input type="hidden" id="wf-id" />
+          <div class="row">
+            <div style="flex:none;width:90px"><label>emoji</label><input id="wf-emoji" placeholder="🧩" maxlength="4" /></div>
+            <div><label>工作流名称</label><input id="wf-name" placeholder="例如:调研→写作→审查 流水线" /></div>
+          </div>
+          <label>阶段（从上到下顺序执行）</label>
+          <div id="wf-stages"></div>
+          <div class="actions" style="margin-top:8px"><button class="btn" id="wf-add-stage">＋ 加阶段</button></div>
+          <div class="actions"><button class="btn primary" id="wf-save">保存工作流</button><button class="btn" id="wf-reset">清空</button></div>
+        </div>
+      </div></div>
+    </section>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

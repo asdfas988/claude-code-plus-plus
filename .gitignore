@@ -1,0 +1,5 @@
+node_modules/
+*.log
+*.test.json
+engine-test*
+.evolve-signal.json

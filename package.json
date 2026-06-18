@@ -1,0 +1,15 @@
+{
+  "name": "claude-desktop-agent",
+  "version": "0.0.1",
+  "description": "Desktop GUI that drives the local Claude Code CLI, with plugin/MCP management and OS-level GUI automation. Phase 0 spike.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "mcp:test": "node mcp/gui-automation/server.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^42.4.1"
+  }
+}
