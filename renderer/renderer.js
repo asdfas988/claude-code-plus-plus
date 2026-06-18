@@ -9,7 +9,7 @@ let assistantBodyEl = null;
 let busy = false;
 
 // ===================== 页面导航 =====================
-const pages = { chat: $('page-chat'), providers: $('page-providers'), plugins: $('page-plugins'), agents: $('page-agents'), workflows: $('page-workflows') };
+const pages = { chat: $('page-chat'), providers: $('page-providers'), plugins: $('page-plugins'), agents: $('page-agents'), workflows: $('page-workflows'), skills: $('page-skills'), terminal: $('page-terminal') };
 const navBtns = document.querySelectorAll('.nav-btn');
 function showPage(name) {
   Object.values(pages).forEach(p => p.classList.remove('active'));
@@ -19,7 +19,9 @@ function showPage(name) {
   if (name === 'plugins') refreshMcp();
   if (name === 'agents') refreshAgents();
   if (name === 'workflows') refreshWorkflows();
-  $('top-title').textContent = name === 'providers' ? '服务商' : name === 'plugins' ? '插件与 MCP' : name === 'agents' ? 'Agent 管理' : name === 'workflows' ? '团队 / 工作流' : (currentTitle() || '新对话');
+  if (name === 'skills') refreshSkills();
+  if (name === 'terminal') openTerminalPage();
+  $('top-title').textContent = name === 'providers' ? '服务商' : name === 'plugins' ? '插件与 MCP' : name === 'agents' ? 'Agent 管理' : name === 'workflows' ? '团队 / 工作流' : name === 'skills' ? 'Skills' : name === 'terminal' ? '终端' : (currentTitle() || '新对话');
 }
 navBtns.forEach(b => b.addEventListener('click', () => showPage(b.dataset.page)));
 function currentTitle() { const c = convCache.find(x => x.id === currentConvId); return c ? c.title : ''; }
@@ -481,6 +483,152 @@ window.workflows.onEvent((d) => {
       appendLive({ type: 'system', text: '⚠️ 工作流出错:' + d.text });
       wfRunning = false; busy = false; sendBtn.disabled = false; stateEl.style.display = 'none'; break;
   }
+});
+
+// ===================== Skills 列表 =====================
+async function refreshSkills() {
+  const listEl = $('skills-list');
+  listEl.innerHTML = '<div class="empty-hint">扫描中…</div>';
+  let data;
+  try { data = await window.skills.list(); }
+  catch (e) { listEl.innerHTML = '<div class="empty-hint">读取失败:' + escapeHtml(String(e && e.message || e)) + '</div>'; return; }
+  $('skills-dir').textContent = data.dir;
+  $('skills-count').textContent = data.items.length;
+  if (!data.items.length) { listEl.innerHTML = '<div class="empty-hint">还没有 skill。让 Claude 用 <code>/find-skills</code> 帮你装一个,或用 <code>/huashu-nuwa</code> 帮你造一个。</div>'; return; }
+  listEl.innerHTML = '';
+  for (const it of data.items) {
+    const card = document.createElement('div'); card.className = 'agent-card';
+    const emoji = document.createElement('div'); emoji.className = 'ac-emoji'; emoji.textContent = '📚';
+    const main = document.createElement('div'); main.className = 'ac-main';
+    const nm = document.createElement('div'); nm.className = 'ac-name';
+    nm.innerHTML = '<code>/' + escapeHtml(it.name) + '</code>' + (it.isLink ? ' <span class="tag">链接</span>' : '') + (it.hasMd ? '' : ' <span class="tag" style="color:var(--danger)">缺 SKILL.md</span>');
+    const desc = document.createElement('div'); desc.className = 'ac-desc'; desc.textContent = it.description || '(无描述)';
+    const meta = document.createElement('div'); meta.className = 'ac-meta'; meta.textContent = it.source;
+    main.appendChild(nm); main.appendChild(desc); main.appendChild(meta);
+    const acts = document.createElement('div'); acts.className = 'ac-acts';
+    const openBtn = document.createElement('button'); openBtn.className = 'btn sm'; openBtn.textContent = '查看 SKILL.md';
+    openBtn.addEventListener('click', () => { if (it.hasMd) window.skills.open(it.skillFile); });
+    if (!it.hasMd) openBtn.disabled = true;
+    const revealBtn = document.createElement('button'); revealBtn.className = 'btn sm'; revealBtn.textContent = '打开目录';
+    revealBtn.addEventListener('click', () => window.skills.reveal(it.skillFile || it.source));
+    acts.appendChild(openBtn); acts.appendChild(revealBtn);
+    card.appendChild(emoji); card.appendChild(main); card.appendChild(acts);
+    listEl.appendChild(card);
+  }
+}
+$('skills-refresh').addEventListener('click', refreshSkills);
+
+// ===================== 终端模式(真 PTY,xterm.js 渲染) =====================
+const TERM_SESSION = 'main';
+let term = null, termFit = null, termOpened = false, termAlive = false, termDataBound = false;
+function setTermStatus(text, kind) {
+  $('term-status').textContent = text;
+  const dot = $('term-dot'); dot.classList.remove('ok', 'err');
+  if (kind === 'ok') dot.classList.add('ok'); else if (kind === 'err') dot.classList.add('err');
+}
+function showTermBanner(text) {
+  const b = $('term-banner');
+  if (!text) { b.style.display = 'none'; b.textContent = ''; return; }
+  b.style.display = 'block'; b.textContent = text;
+}
+function ensureTerm() {
+  if (term) return;
+  // xterm.js 暴露在全局 window.Terminal / window.FitAddon(addon-fit 的 UMD 入口)
+  const Terminal = window.Terminal;
+  const FitAddon = (window.FitAddon && window.FitAddon.FitAddon) || window.FitAddon;
+  if (!Terminal || !FitAddon) { showTermBanner('xterm.js 没加载到(检查 node_modules/@xterm)'); return; }
+  term = new Terminal({
+    fontFamily: 'Consolas, "JetBrains Mono", "Cascadia Code", Menlo, monospace',
+    fontSize: 13, cursorBlink: true, allowProposedApi: true,
+    theme: { background: '#1e1e1e', foreground: '#e8e6df', cursor: '#d97757', selectionBackground: '#44403a' },
+    scrollback: 5000, windowsMode: true,
+  });
+  termFit = new FitAddon();
+  term.loadAddon(termFit);
+  term.open($('term-host'));
+  termFit.fit();
+  // Ctrl+V / Ctrl+Shift+V 粘贴；Ctrl+Shift+C 复制。Ctrl+C 保留给 PTY 作为中断。
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown') return true;
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (!ctrl) return true;
+    const k = (e.key || '').toLowerCase();
+    if (k === 'v') {
+      e.preventDefault();
+      navigator.clipboard.readText().then((txt) => {
+        if (txt && termAlive) window.cli.write(TERM_SESSION, txt);
+      }).catch(() => {});
+      return false;
+    }
+    if (e.shiftKey && k === 'c') {
+      const sel = term.getSelection();
+      if (sel) {
+        e.preventDefault();
+        navigator.clipboard.writeText(sel).catch(() => {});
+        return false;
+      }
+    }
+    return true;
+  });
+  // 右键粘贴：和大部分 Windows 终端一致
+  $('term-host').addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    navigator.clipboard.readText().then((txt) => {
+      if (txt && termAlive) window.cli.write(TERM_SESSION, txt);
+    }).catch(() => {});
+  });
+  if (!termDataBound) {
+    term.onData((data) => { if (termAlive) window.cli.write(TERM_SESSION, data); });
+    termDataBound = true;
+  }
+  window.addEventListener('resize', () => { if (term && pages.terminal.classList.contains('active')) try { termFit.fit(); if (termAlive) window.cli.resize(TERM_SESSION, term.cols, term.rows); } catch {} });
+  window.cli.onData(({ sessionId, data }) => { if (sessionId === TERM_SESSION && term) term.write(data); });
+  window.cli.onExit(({ sessionId, exitCode }) => {
+    if (sessionId !== TERM_SESSION) return;
+    termAlive = false;
+    setTermStatus('已退出 (exit ' + exitCode + ')', 'err');
+    if (term) term.write('\r\n\x1b[33m[claude 已退出,点"重启"再来一发]\x1b[0m\r\n');
+  });
+}
+async function openTerminalPage() {
+  ensureTerm();
+  if (!term) return; // xterm 没装上
+  // 渲染完一帧再 fit,确保 host 拿到尺寸
+  await new Promise(r => requestAnimationFrame(r));
+  try { termFit.fit(); } catch {}
+  if (termAlive) { term.focus(); return; }
+  await startTermSession();
+  term.focus();
+}
+async function startTermSession() {
+  setTermStatus('启动中…');
+  showTermBanner('');
+  const chk = await window.cli.check();
+  if (!chk.available) {
+    setTermStatus('不可用', 'err');
+    showTermBanner('终端不可用:' + (chk.error || '原因未知') + '。要不就在 PATH 里装上 claude,要不就让 node-pty 在 Electron 里能加载(可能需要 electron-rebuild)。');
+    return;
+  }
+  const r = await window.cli.open({ sessionId: TERM_SESSION, cols: term.cols, rows: term.rows });
+  if (!r.ok) { setTermStatus('启动失败', 'err'); showTermBanner(r.error || '未知错误'); return; }
+  termAlive = true;
+  termOpened = true;
+  $('term-cwd').style.display = 'inline-block';
+  $('term-cwd').textContent = r.cwd;
+  setTermStatus(r.reused ? '复用已有会话' : '运行中', 'ok');
+}
+$('term-restart').addEventListener('click', async () => {
+  if (!term) return;
+  if (termAlive) { window.cli.close(TERM_SESSION); termAlive = false; await new Promise(r => setTimeout(r, 200)); }
+  term.reset();
+  await startTermSession();
+  term.focus();
+});
+$('term-stop').addEventListener('click', () => {
+  if (!termAlive) return;
+  window.cli.close(TERM_SESSION);
+  termAlive = false;
+  setTermStatus('已关闭', 'err');
 });
 
 // ===================== 启动 =====================

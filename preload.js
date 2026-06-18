@@ -47,6 +47,22 @@ contextBridge.exposeInMainWorld('providers', {
   setActive: (id) => ipcRenderer.invoke('providers:setActive', id),
 });
 
+contextBridge.exposeInMainWorld('skills', {
+  list: () => ipcRenderer.invoke('skills:list'),
+  reveal: (p) => ipcRenderer.invoke('skills:reveal', p),
+  open: (p) => ipcRenderer.invoke('skills:open', p),
+});
+
+contextBridge.exposeInMainWorld('cli', {
+  check: () => ipcRenderer.invoke('cli:check'),
+  open: (opts) => ipcRenderer.invoke('cli:open', opts || {}),
+  write: (sessionId, data) => ipcRenderer.send('cli:write', { sessionId, data }),
+  resize: (sessionId, cols, rows) => ipcRenderer.send('cli:resize', { sessionId, cols, rows }),
+  close: (sessionId) => ipcRenderer.send('cli:close', { sessionId }),
+  onData: (cb) => ipcRenderer.on('cli:data', (_e, d) => cb(d)),
+  onExit: (cb) => ipcRenderer.on('cli:exit', (_e, d) => cb(d)),
+});
+
 contextBridge.exposeInMainWorld('mcp', {
   list: () => ipcRenderer.invoke('mcp:list'),
   toggle: (id, enabled) => ipcRenderer.invoke('mcp:toggle', { id, enabled }),

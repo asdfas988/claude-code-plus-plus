@@ -221,7 +221,21 @@
     .row { display: flex; gap: 12px; } .row > div { flex: 1; }
     .actions { margin-top: 16px; display: flex; gap: 10px; }
     .hint { font-size: 11.5px; color: var(--faint); margin-top: 8px; line-height: 1.5; }
+    /* 终端页 */
+    .term-page { display: flex; flex-direction: column; height: 100%; background: #1e1e1e; }
+    .term-bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: #2a2a2a; color: #ddd; font-size: 12px; border-bottom: 1px solid #111; }
+    .term-bar .dot { width: 8px; height: 8px; border-radius: 50%; background: #777; display: inline-block; }
+    .term-bar .dot.ok { background: #58c463; }
+    .term-bar .dot.err { background: #e25c5c; }
+    .term-bar .sep { flex: 1; }
+    .term-bar .term-btn { background: #3a3a3a; color: #eee; border: 1px solid #4a4a4a; border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+    .term-bar .term-btn:hover { background: #4a4a4a; }
+    .term-bar code { background: #1a1a1a; padding: 1px 6px; border-radius: 4px; color: #cfc8b8; font-size: 11px; }
+    #term-host { flex: 1; min-height: 0; padding: 6px 8px; }
+    #term-host .xterm { height: 100%; }
+    #term-banner { color: #d97757; padding: 12px 14px; font-size: 13px; background: #2a1f1a; border-bottom: 1px solid #3a2a22; display: none; }
   </style>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
 </head>
 <body>
   <!-- ============ 侧栏 ============ -->
@@ -239,6 +253,8 @@
       <button class="nav-btn" id="nav-evolve" title="和 App 对话,让它给自己加功能/改界面/调设计(改自己源码,git 快照可回滚)"><span class="ic">🧬</span><span>自我进化</span></button>
       <button class="nav-btn" data-page="agents"><span class="ic">🤖</span><span>Agent 管理</span></button>
       <button class="nav-btn" data-page="workflows"><span class="ic">👥</span><span>团队 / 工作流</span></button>
+      <button class="nav-btn" data-page="skills"><span class="ic">📚</span><span>Skills</span></button>
+      <button class="nav-btn" data-page="terminal" title="真 PTY,完整 TUI 体验,/permissions / /login / /help 等斜杠命令在这里都能用"><span class="ic">▶_</span><span>终端</span></button>
       <button class="nav-btn" data-page="providers"><span class="ic">⚙</span><span>服务商</span></button>
       <button class="nav-btn" data-page="plugins"><span class="ic">🧩</span><span>插件与 MCP 开关</span></button>
     </nav>
@@ -338,6 +354,36 @@
       </div></div>
     </section>
 
+    <!-- Skills 页 -->
+    <section class="page" id="page-skills">
+      <div class="settings"><div class="settings-inner">
+        <div class="hint" style="background:var(--accent-soft);border:1px solid #eccdbf;color:var(--accent-press);padding:12px 14px;border-radius:10px;margin-bottom:6px;font-size:13px">
+          📚 Skills = Claude Code 自带的"技能包"，扫描自 <code id="skills-dir">~/.claude/skills/</code>。在对话里输入 <code>/&lt;skill-name&gt;</code> 即可调用；想新增 skill 让 Claude 用 <code>/find-skills</code> 帮你装、用 <code>/huashu-nuwa</code> 帮你造。
+        </div>
+        <h2 class="sec" style="display:flex;align-items:center;gap:10px">
+          <span>已安装的 Skills（<span id="skills-count">0</span>）</span>
+          <button class="btn sm" id="skills-refresh" style="margin-left:auto">↻ 刷新</button>
+        </h2>
+        <div id="skills-list"></div>
+      </div></div>
+    </section>
+
+    <!-- 终端页(真 PTY,跑原生 claude 完整 TUI) -->
+    <section class="page" id="page-terminal">
+      <div class="term-page">
+        <div class="term-bar">
+          <span class="dot" id="term-dot"></span>
+          <span id="term-status">未启动</span>
+          <code id="term-cwd" style="display:none"></code>
+          <span class="sep"></span>
+          <button class="term-btn" id="term-restart">重启</button>
+          <button class="term-btn" id="term-stop">关闭</button>
+        </div>
+        <div id="term-banner"></div>
+        <div id="term-host"></div>
+      </div>
+    </section>
+
     <!-- 团队 / 工作流页 -->
     <section class="page" id="page-workflows">
       <div class="settings"><div class="settings-inner">
@@ -362,6 +408,8 @@
     </section>
   </main>
 
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

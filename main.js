@@ -7,10 +7,11 @@
  *  对话层:多对话持久化(标题/消息/sessionId)
  *  插件层:MCP 列表(内置 GUI 自动化 + 自定义/AI 生成),启用禁用;AI 一句话造插件。
  */
-const { app, BrowserWindow, ipcMain, safeStorage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, dialog, shell } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 let mainWindow = null;
 const MCP_SERVER = path.join(__dirname, 'mcp', 'gui-automation', 'server.js');
@@ -609,3 +610,131 @@ ipcMain.handle('mcp:save', (_e, p) => {
   saveMcp(s); return publicMcp();
 });
 ipcMain.handle('mcp:remove', (_e, id) => { if (id === 'gui' || id === 'pluginmgr') return publicMcp(); const s = loadMcp(); s.servers = s.servers.filter(v => v.id !== id); saveMcp(s); return publicMcp(); });
+
+// ---- Skills(本机 Claude Code skills 列表) ----
+function parseSkillFrontmatter(text) {
+  if (!text.startsWith('---')) return {};
+  const end = text.indexOf('\n---', 3);
+  if (end < 0) return {};
+  const fm = text.slice(3, end).split(/\r?\n/);
+  const out = {}; let key = null; let buf = [];
+  const flush = () => { if (key) out[key] = buf.join('\n').trim(); };
+  for (const line of fm) {
+    const m = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
+    if (m) { flush(); key = m[1]; buf = m[2] ? [m[2]] : []; }
+    else if (key && (line.startsWith('  ') || line.startsWith('\t'))) { buf.push(line.replace(/^\s+/, '')); }
+  }
+  flush();
+  return out;
+}
+function listInstalledSkills() {
+  const skillsDir = path.join(os.homedir(), '.claude', 'skills');
+  if (!fs.existsSync(skillsDir)) return { dir: skillsDir, items: [] };
+  const items = [];
+  for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue;
+    const full = path.join(skillsDir, entry.name);
+    let realPath = full; let isLink = false;
+    try { const lst = fs.lstatSync(full); isLink = lst.isSymbolicLink(); if (isLink) realPath = fs.realpathSync(full); } catch {}
+    const md = path.join(realPath, 'SKILL.md');
+    let name = entry.name, description = '', hasMd = false;
+    if (fs.existsSync(md)) {
+      hasMd = true;
+      try {
+        const text = fs.readFileSync(md, 'utf8');
+        const fm = parseSkillFrontmatter(text);
+        if (fm.name) name = String(fm.name).trim();
+        if (fm.description) description = String(fm.description).replace(/\s+/g, ' ').trim();
+      } catch {}
+    }
+    items.push({ dirName: entry.name, name, description, isLink, source: realPath, skillFile: md, hasMd });
+  }
+  items.sort((a, b) => a.name.localeCompare(b.name));
+  return { dir: skillsDir, items };
+}
+ipcMain.handle('skills:list', () => listInstalledSkills());
+ipcMain.handle('skills:reveal', (_e, p) => { try { shell.showItemInFolder(p); return true; } catch { return false; } });
+ipcMain.handle('skills:open', (_e, p) => { try { shell.openPath(p); return true; } catch { return false; } });
+
+// ===================== 终端模式 (真 PTY,跑原生 claude CLI 的完整 TUI) =====================
+// 普通"对话引擎"用 -p stream-json,CLI 自己判定为非交互,/permissions / /login / /help 等斜杠命令全部不可用。
+// 这里给它一个伪终端,xterm.js 渲染,完整 TUI 体验。
+let _pty = null; let _ptyErr = null;
+function loadPty() {
+  if (_pty || _ptyErr) return _pty;
+  try { _pty = require('node-pty'); } catch (e) { _ptyErr = e; }
+  return _pty;
+}
+function resolveClaudeExe() {
+  const PATHEXT = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';').map(s => s.trim()).filter(Boolean);
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of PATHEXT) {
+      const p = path.join(dir, 'claude' + ext);
+      try { if (fs.existsSync(p)) return p; } catch {}
+    }
+    // 无后缀(类 Unix 安装)
+    const bare = path.join(dir, 'claude');
+    try { if (fs.existsSync(bare)) return bare; } catch {}
+  }
+  return null;
+}
+
+// 每个会话一个 pty;key 由 renderer 指定,默认就 "main" 一个全局终端
+const ptys = new Map(); // sessionId -> { proc, cwd }
+
+function ptyKill(sessionId) {
+  const s = ptys.get(sessionId); if (!s) return;
+  try { s.proc.kill(); } catch {}
+  ptys.delete(sessionId);
+}
+
+ipcMain.handle('cli:check', () => {
+  const mod = loadPty();
+  const exe = resolveClaudeExe();
+  return { available: !!mod && !!exe, claudePath: exe, error: _ptyErr ? String(_ptyErr.message || _ptyErr) : (!exe ? '在 PATH 里没找到 claude 可执行文件' : '') };
+});
+
+ipcMain.handle('cli:open', (_e, { sessionId, cols, rows, cwd }) => {
+  const id = sessionId || 'main';
+  const mod = loadPty();
+  if (!mod) return { ok: false, error: 'node-pty 加载失败: ' + String(_ptyErr && _ptyErr.message || _ptyErr) };
+  const exe = resolveClaudeExe();
+  if (!exe) return { ok: false, error: '在 PATH 里没找到 claude 可执行文件' };
+  // 已存在且活着:直接复用
+  const existing = ptys.get(id);
+  if (existing && existing.proc && !existing.proc.killed) {
+    try { existing.proc.resize(Math.max(20, cols | 0), Math.max(4, rows | 0)); } catch {}
+    return { ok: true, reused: true, claudePath: exe, cwd: existing.cwd };
+  }
+  const workDir = (cwd && fs.existsSync(cwd)) ? cwd : (app.getPath('home') || PROJECT_DIR);
+  let proc;
+  try {
+    proc = mod.spawn(exe, [], {
+      name: 'xterm-256color',
+      cols: Math.max(20, cols | 0) || 100,
+      rows: Math.max(4, rows | 0) || 30,
+      cwd: workDir,
+      env: { ...buildEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+    });
+  } catch (e) { return { ok: false, error: 'spawn 失败: ' + (e.message || e) }; }
+  ptys.set(id, { proc, cwd: workDir });
+  proc.onData((data) => { send('cli:data', { sessionId: id, data }); });
+  proc.onExit(({ exitCode, signal }) => {
+    if (ptys.get(id) && ptys.get(id).proc === proc) ptys.delete(id);
+    send('cli:exit', { sessionId: id, exitCode, signal });
+  });
+  return { ok: true, reused: false, claudePath: exe, cwd: workDir };
+});
+
+ipcMain.on('cli:write', (_e, { sessionId, data }) => {
+  const s = ptys.get(sessionId || 'main'); if (!s) return;
+  try { s.proc.write(data); } catch {}
+});
+ipcMain.on('cli:resize', (_e, { sessionId, cols, rows }) => {
+  const s = ptys.get(sessionId || 'main'); if (!s) return;
+  try { s.proc.resize(Math.max(20, cols | 0), Math.max(4, rows | 0)); } catch {}
+});
+ipcMain.on('cli:close', (_e, { sessionId }) => ptyKill(sessionId || 'main'));
+
+app.on('before-quit', () => { for (const id of Array.from(ptys.keys())) ptyKill(id); });
