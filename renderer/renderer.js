@@ -144,7 +144,7 @@ let loopMode = false;   // 开关:把输入当「目标」交给 agent loop
 let looping = false;    // 正在循环中
 const LOOP_MAX = 6;     // 最多轮数
 const LOOP_REVIEWER = true; // 三角色:含审查员
-const PH_DEFAULT = '给 Claude 发消息……(Ctrl+Enter 发送)';
+const PH_DEFAULT = '给 Claude 发消息……(Enter 发送,Shift+Enter 换行)';
 const PH_LOOP = '输入一个【目标】(最好带可验证的完成标准)……我会自己循环推进直到达成';
 
 autoBtn.addEventListener('click', () => {
@@ -192,7 +192,7 @@ async function sendPrompt() {
   }
 }
 sendBtn.addEventListener('click', sendPrompt);
-inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendPrompt(); } });
+inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendPrompt(); } });
 inputEl.addEventListener('input', () => { inputEl.style.height = 'auto'; inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + 'px'; });
 
 window.agent.onEvent((d) => {
