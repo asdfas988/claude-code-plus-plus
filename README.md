@@ -64,6 +64,8 @@ powershell -ExecutionPolicy Bypass -File create-shortcut.ps1
 
 > 桌面图标用的是 Electron 图标，所以请在 `npm install` **之后**再生成快捷方式。
 
+两种方式都以**独立进程**启动 App —— 关闭命令行窗口不会再连带退出程序。
+
 ## 说明
 
 - 平台：目前面向 Windows。

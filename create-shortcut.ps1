@@ -8,9 +8,10 @@ $projectDir = $PSScriptRoot
 $desktop    = [Environment]::GetFolderPath('Desktop')
 $lnkPath    = Join-Path $desktop 'Claude Code++.lnk'
 
-# Launch hidden: powershell runs "npm start" with no visible window
+# Launch detached + hidden: the launcher fires npm start as an independent
+# process and exits immediately, so the app keeps running on its own.
 $target    = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$arguments = "-WindowStyle Hidden -NoProfile -Command ""cd '$projectDir'; npm start"""
+$arguments = "-WindowStyle Hidden -NoProfile -Command ""Start-Process npm -ArgumentList 'start' -WorkingDirectory '$projectDir' -WindowStyle Hidden"""
 
 $shell = New-Object -ComObject WScript.Shell
 $sc = $shell.CreateShortcut($lnkPath)
