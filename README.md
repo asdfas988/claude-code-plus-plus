@@ -48,6 +48,9 @@ npm install
 npm start
 ```
 
+> **关于 `npm install` 慢 / 卡在下载 Electron**：仓库自带 `.npmrc`，已把依赖和 Electron 预编译二进制都指向**国内淘宝镜像**，换设备 clone 后直接 `npm install` 即可，无需配置环境变量。
+> 如果你在境外、希望走官方源，删掉 `.npmrc` 即可。
+
 ## 说明
 
 - 平台：目前面向 Windows。
