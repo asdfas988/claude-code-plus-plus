@@ -55,7 +55,7 @@ npm start
 
 `npm install` 跑完一次后，下次启动不用再敲命令，二选一：
 
-- **双击 `start.bat`** —— 直接启动（首次会自动 `npm install`）。
+- **双击 `start.bat`** —— 直接启动。首次会在一个**独立的安装窗口**里自动 `npm install`，你双击的那个窗口可以立刻关掉，安装窗口装完会自动打开 App。
 - **桌面快捷方式** —— 运行一次 `create-shortcut.ps1`（右键 → 用 PowerShell 运行），桌面会出现「Claude Code++」图标，之后双击图标即开，**不弹黑窗口**。
 
 ```powershell
@@ -64,7 +64,7 @@ powershell -ExecutionPolicy Bypass -File create-shortcut.ps1
 
 > 快捷方式直接指向 `node_modules\electron\dist\electron.exe`，所以请在 `npm install` **之后**再生成。
 
-两种方式都直接拉起 Electron，以**独立进程**运行 —— 无命令行黑窗口，关闭任何窗口都不会退出 App。
+两种方式都直接拉起 Electron，以**独立进程**运行 —— 无命令行黑窗口，关闭任何窗口都不会退出 App。首次安装时唯一例外：请等那个独立的安装窗口自己装完（别手动关它），装完即自动启动，之后便彻底与命令行无关。
 
 > 若杀毒软件（如火绒）拦截"脚本创建快捷方式"，放行即可；快捷方式只是指向本地 `electron.exe`，不含任何隐藏脚本。也可手动建：右键 `node_modules\electron\dist\electron.exe` → 发送到桌面快捷方式，再把"目标"参数后面加一个 `.`。
 
