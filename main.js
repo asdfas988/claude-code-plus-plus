@@ -19,6 +19,14 @@ const PLUGINMGR_SERVER = path.join(__dirname, 'mcp', 'plugin-manager', 'server.j
 const AGENTMGR_SERVER = path.join(__dirname, 'mcp', 'agent-manager', 'server.js');
 const SELFEVOLVE_SERVER = path.join(__dirname, 'mcp', 'self-evolve', 'server.js');
 const PROJECT_DIR = __dirname; // App 自己的源码根目录(自我进化对象)
+// Playwright MCP:本地已固定安装则用 node 直接起 cli.js(秒开、免联网、无 cmd/npx 开销);
+// 没装上则退回 npx(版本已固定,走缓存而非每次解析 @latest)。
+const PW_CLI = path.join(__dirname, 'node_modules', '@playwright', 'mcp', 'cli.js');
+const PW_VER = '0.0.76';
+function pwEntry(extra) {
+  if (fs.existsSync(PW_CLI)) return { command: 'node', args: [PW_CLI, ...extra] };
+  return { command: 'cmd', args: ['/c', 'npx', '-y', '@playwright/mcp@' + PW_VER, ...extra] };
+}
 
 // 自我进化对话的系统提示词
 const EVOLVE_SYS = [
@@ -107,10 +115,19 @@ function ensureMcpDefault(s) {
   if (!am) s.servers.splice(2, 0, { id: 'agentmgr', name: 'Agent 管理器', desc: '让 Claude 在对话里创建/编辑/召唤自定义 Agent(内置)', enabled: true, transport: 'stdio', command: 'node', args: [AGENTMGR_SERVER], builtin: true });
   else { am.command = 'node'; am.args = [AGENTMGR_SERVER]; am.builtin = true; }
   // 浏览器:Playwright(默认有窗口,方便看到 Claude 在干什么;--isolated 用独立 profile,不污染你自己的 Chrome)
-  const PW_ARGS = ['/c', 'npx', '-y', '@playwright/mcp@latest', '--isolated'];
+  const pwIso = pwEntry(['--isolated']);
   const pw = s.servers.find(x => x.id === 'playwright');
-  if (!pw) s.servers.push({ id: 'playwright', name: '浏览器(Playwright · 有窗口)', desc: '让 Claude 操作一个受控浏览器(有窗口可见 + 独立 profile,不影响你自己的 Chrome);要后台静默跑,可在 args 里加 --headless', enabled: false, transport: 'stdio', command: 'cmd', args: PW_ARGS, builtin: true });
-  else { pw.command = 'cmd'; pw.args = PW_ARGS; pw.transport = 'stdio'; pw.builtin = true; }
+  if (!pw) s.servers.push({ id: 'playwright', name: '浏览器(Playwright · 有窗口)', desc: '让 Claude 操作一个受控浏览器(有窗口可见 + 独立 profile,不影响你自己的 Chrome);要后台静默跑,可在 args 里加 --headless', enabled: false, transport: 'stdio', command: pwIso.command, args: pwIso.args, builtin: true });
+  else { pw.command = pwIso.command; pw.args = pwIso.args; pw.transport = 'stdio'; pw.builtin = true; }
+  // 浏览器:后台 · 保留登录(像 Codex App 那样)——用系统 Chrome + 一个独立持久化 profile。
+  // 首次启用后会弹出一个独立 Chrome 窗口,你在里面把需要的网站登录一次,登录态就一直记在这个 profile 里;
+  // 之后 Playwright 全程用 CDP 驱动页面(注入合成事件),【不动你的真实鼠标键盘】,也【不碰你日常那个 Chrome】。
+  // 想完全无窗口纯后台:登录过一次后,在 args 末尾加 '--headless' 即可。
+  const PW_PROFILE = path.join(app.getPath('userData'), 'pw-chrome-profile');
+  const pwBg = pwEntry(['--browser', 'chrome', '--user-data-dir', PW_PROFILE]);
+  const pwbg = s.servers.find(x => x.id === 'browser-bg');
+  if (!pwbg) s.servers.push({ id: 'browser-bg', name: '浏览器(后台 · 保留登录)', desc: '用你的 Chrome 在独立窗口后台干活:保留登录态(独立 profile,首次在弹出的窗口登录一次),用 CDP 驱动不抢你的真实鼠标键盘,也不影响你日常的 Chrome;要完全无窗口可在 args 末尾加 --headless', enabled: false, transport: 'stdio', command: pwBg.command, args: pwBg.args, builtin: true });
+  else { pwbg.command = pwBg.command; pwbg.args = pwBg.args; pwbg.transport = 'stdio'; pwbg.builtin = true; }
   // 浏览器:接管你正在用的 Chrome(Claude Code --chrome 集成,非 MCP,用 flag 表示)
   const cr = s.servers.find(x => x.id === 'chrome');
   if (!cr) s.servers.push({ id: 'chrome', name: '浏览器(接管我的 Chrome)', desc: '用 Claude 的 Chrome 集成接管你正在用的真实 Chrome(含登录态);需已安装对应扩展', enabled: false, transport: 'flag', builtin: true });
@@ -151,8 +168,15 @@ function buildMcpConfigFile(convId, allow, includeEvolve) {
 }
 
 // ===================== 对话存储 =====================
-const loadConvs = () => { const s = readJson('conversations.json', { list: [] }); if (!Array.isArray(s.list)) s.list = []; return s; };
-const saveConvs = (s) => writeJson('conversations.json', s);
+// 内存缓存 + 写盘 debounce:对话是最热的读写路径(每轮 / 每次切换都碰),
+// 全程整文件 read+parse+write 会让主进程同步卡顿。缓存一份,写盘合并到 300ms,退出时强制落盘。
+let _convCache = null, _convFlushTimer = null;
+function loadConvs() {
+  if (!_convCache) { _convCache = readJson('conversations.json', { list: [] }); if (!Array.isArray(_convCache.list)) _convCache.list = []; }
+  return _convCache;
+}
+function flushConvs() { if (_convFlushTimer) { clearTimeout(_convFlushTimer); _convFlushTimer = null; } if (_convCache) { try { writeJson('conversations.json', _convCache); } catch {} } }
+function saveConvs(s) { _convCache = s; if (_convFlushTimer) return; _convFlushTimer = setTimeout(() => { _convFlushTimer = null; flushConvs(); }, 300); }
 const getConv = (id) => loadConvs().list.find(c => c.id === id);
 function publicConvList() { return loadConvs().list.map(c => ({ id: c.id, title: c.title || (c.kind === 'plugin' ? '新插件' : '新对话'), updatedAt: c.updatedAt || 0, kind: c.kind || 'chat', pluginId: c.pluginId || null, agentId: c.agentId || null })).sort((a, b) => b.updatedAt - a.updatedAt); }
 function createConv(kind) { const s = loadConvs(); const c = { id: genId('c'), kind: kind || 'chat', pluginId: null, title: '', sessionId: null, messages: [], updatedAt: Date.now() }; s.list.push(c); saveConvs(s); return c; }
@@ -162,7 +186,7 @@ function convForPlugin(pluginId, name) {
   if (!c) { c = { id: genId('c'), kind: 'plugin', pluginId, title: name || '插件', sessionId: null, messages: [], updatedAt: Date.now() }; s.list.push(c); saveConvs(s); }
   return c;
 }
-function deleteConv(id) { const s = loadConvs(); s.list = s.list.filter(c => c.id !== id); saveConvs(s); }
+function deleteConv(id) { const s = loadConvs(); s.list = s.list.filter(c => c.id !== id); saveConvs(s); try { fs.unlinkSync(dataFile('gui-mcp-' + id + '.json')); } catch {} }
 function setConvSession(id, sid) { const s = loadConvs(); const c = s.list.find(x => x.id === id); if (c && sid) { c.sessionId = sid; saveConvs(s); } }
 function setConvAgent(id, agentId) { const s = loadConvs(); const c = s.list.find(x => x.id === id); if (c) { c.agentId = agentId || null; c.updatedAt = Date.now(); saveConvs(s); } }
 function appendMessages(id, msgs) {
@@ -192,20 +216,60 @@ function publicWorkflows() { return loadWorkflows().workflows.map(w => ({ id: w.
 // ===================== 常驻对话引擎(每个对话一个独立进程,互不打架) =====================
 // 每个 convId 对应一个 { proc, sessionId, ready, busy, run, buf, mcpSig, startServerIds, allow, isEvolve }
 const engines = new Map();
+const ENGINE_IDLE_MS = 10 * 60 * 1000; // 空闲超过 10 分钟的常驻引擎自动回收(下次发消息用 --resume 秒续)
+const MAX_LIVE_ENGINES = 3;            // 常驻引擎数量上限;超出则回收最久未用的空闲引擎
+let lastViewedConv = null;             // 渲染层最近打开/发消息的对话,它的引擎不回收
 
 function killEngine(convId) {
   const e = engines.get(convId);
   if (!e) return;
-  if (e.proc) { try { e.proc.stdin.end(); } catch {} try { e.proc.kill(); } catch {} }
   engines.delete(convId);
+  // 立刻把这一对话当作"已中断"收尾:落盘已收到的中间结果 + 发 engine-done 解锁界面。
+  // 关键:Windows 上 shell:true 起的 claude 是 cmd 的孙子进程,只 kill 掉 cmd 壳
+  // 并不会停掉 claude,它还占着 stdout 管道 → 子进程的 'close' 迟迟不来 → 界面永远卡在"思考中"。
+  // 所以这里主动收尾,不再傻等 close。
+  if (e.run && e.busy) finishTurn(e, true);
+  const proc = e.proc;
+  if (proc) {
+    try { proc.stdin.end(); } catch {}
+    // 整棵进程树都杀掉(cmd → claude → 各 MCP 子进程),否则 claude 会变孤儿继续在后台跑(还可能继续操作鼠标/浏览器)
+    if (process.platform === 'win32' && proc.pid) {
+      try { spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F']); } catch {}
+    }
+    try { proc.kill(); } catch {}
+  }
 }
 function killAllEngines() { for (const id of Array.from(engines.keys())) killEngine(id); }
+
+// 引擎是否可被回收:不忙、非当前查看、且没在跑 Agent Loop
+function engineRecyclable(convId) {
+  const e = engines.get(convId);
+  if (!e || e.busy) return false;
+  if (convId === lastViewedConv) return false;
+  const lp = loops.get(convId);
+  if (lp && lp.active) return false;
+  return true;
+}
+// 回收:① 空闲超时的;② 数量超限时,挑最久未用的可回收引擎砍掉
+function reapEngines() {
+  const now = Date.now();
+  for (const id of Array.from(engines.keys())) {
+    if (engineRecyclable(id) && now - (engines.get(id).lastUsed || 0) > ENGINE_IDLE_MS) killEngine(id);
+  }
+  if (engines.size > MAX_LIVE_ENGINES) {
+    const cand = Array.from(engines.keys()).filter(engineRecyclable)
+      .map(id => ({ id, t: engines.get(id).lastUsed || 0 })).sort((a, b) => a.t - b.t);
+    let over = engines.size - MAX_LIVE_ENGINES;
+    for (const c of cand) { if (over <= 0) break; killEngine(c.id); over--; }
+  }
+}
 
 // 打开/预热某对话的常驻进程(已开则复用)
 function openEngine(convId) {
   if (engines.has(convId)) return;
   const conv = getConv(convId);
   if (!conv) return;
+  reapEngines(); // 新开一个前先腾地方,避免常驻进程越积越多
 
   const isEvolve = conv.kind === 'evolve';
   const allow = isEvolve ? null : agentAllowSet(convId);
@@ -223,12 +287,13 @@ function openEngine(convId) {
 
   // 进化对话:工作目录指向 App 源码根目录,让 Claude 能读改自己
   const cwd = isEvolve ? PROJECT_DIR : app.getPath('userData');
-  const child = spawn('claude', args, { shell: true, cwd, env: buildEnv() });
+  const child = spawn('claude', args, { shell: true, cwd, env: buildEnv(), windowsHide: true });
   const e = {
     convId, proc: child, sessionId: conv.sessionId || null,
     ready: false, busy: false, run: null, buf: '',
     mcpSig: cfg.sig, startServerIds: loadMcp().servers.map(s => s.id),
     allow, isEvolve,
+    lastUsed: Date.now(), errTail: '', gotOutput: false, silentTimer: null,
   };
   engines.set(convId, e);
   // 不再发 'warming' —— claude -p stream-json 要等到 stdin 第一条消息才会回 init,
@@ -238,10 +303,17 @@ function openEngine(convId) {
     e.buf += d.toString(); let idx;
     while ((idx = e.buf.indexOf('\n')) >= 0) { const l = e.buf.slice(0, idx).trim(); e.buf = e.buf.slice(idx + 1); if (l) onEngineLine(e, l); }
   });
-  child.stderr.on('data', () => {});
+  child.stderr.on('data', (d) => { e.errTail = (e.errTail + d.toString()).slice(-2000); }); // 留最近 2KB,失败时给用户看
   child.on('error', (err) => { send('engine-event', { convId, kind: 'system', text: 'spawn 失败: ' + err.message }); finishTurn(e, true); });
-  child.on('close', () => {
-    if (e.run && e.busy) finishTurn(e, true);
+  child.on('close', (code) => {
+    // 进程在一轮进行中意外退出且【什么都没产出】→ 多半是真失败(没登录/模型名错/baseUrl 挂了/网络断),
+    // 把 stderr 里有意义的一行报给界面,别再静默卡住。(用户主动停止时 e.run 已清空,不会进这里)
+    if (e.run && e.busy) {
+      const r = e.run;
+      const noOutput = !(r.resultText || (r.accText && r.accText.trim()) || (r.pending || []).some(p => p.type === 'assistant' || p.type === 'tool'));
+      if (noOutput) send('engine-event', { convId, kind: 'system', text: '⚠️ ' + (pickErr(e.errTail) || ('claude 进程意外退出(code ' + code + ')')) });
+      finishTurn(e, true);
+    }
     if (engines.get(convId) === e) engines.delete(convId);
   });
 }
@@ -259,14 +331,14 @@ function onEngineLine(e, line) {
     case 'stream_event': {
       const ev = msg.event || {};
       if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') {
-        if (e.run) e.run.accText += ev.delta.text;
-        send('engine-event', { convId, kind: 'text', text: ev.delta.text });
+        e.gotOutput = true;
+        queueText(e, ev.delta.text);
       }
       break;
     }
     case 'assistant': {
       const blocks = (msg.message && msg.message.content) || [];
-      for (const b of blocks) if (b.type === 'tool_use') { flushAssistant(e); if (e.run) e.run.pending.push({ type: 'tool', name: b.name, input: b.input }); send('engine-event', { convId, kind: 'tool', name: b.name, input: b.input }); }
+      for (const b of blocks) if (b.type === 'tool_use') { e.gotOutput = true; flushText(e); flushAssistant(e); if (e.run) e.run.pending.push({ type: 'tool', name: b.name, input: b.input }); send('engine-event', { convId, kind: 'tool', name: b.name, input: b.input }); }
       break;
     }
     case 'user': {
@@ -277,6 +349,7 @@ function onEngineLine(e, line) {
     case 'result':
       if (msg.session_id) { e.sessionId = msg.session_id; setConvSession(convId, msg.session_id); }
       if (e.run) e.run.resultText = msg.result || '';
+      flushText(e);
       flushAssistant(e);
       send('engine-event', { convId, kind: 'result', text: msg.result || '' });
       finishTurn(e, false);
@@ -284,13 +357,34 @@ function onEngineLine(e, line) {
   }
 }
 function flushAssistant(e) { if (e.run && e.run.accText.trim()) e.run.pending.push({ type: 'assistant', text: e.run.accText }); if (e.run) e.run.accText = ''; }
+// 流式文本节流:把零碎的 token delta 合并到 ~30ms 再发一次,减少 IPC 次数与界面重排
+function queueText(e, t) {
+  if (!e.run) return;
+  e.run.accText += t;              // 落盘用:整段累计
+  e._txtBuf = (e._txtBuf || '') + t; // 发界面用:批量缓冲
+  if (e._txtTimer) return;
+  e._txtTimer = setTimeout(() => { e._txtTimer = null; const s = e._txtBuf; e._txtBuf = ''; if (s) send('engine-event', { convId: e.convId, kind: 'text', text: s }); }, 30);
+}
+function flushText(e) {
+  if (e._txtTimer) { clearTimeout(e._txtTimer); e._txtTimer = null; }
+  if (e._txtBuf) { const s = e._txtBuf; e._txtBuf = ''; send('engine-event', { convId: e.convId, kind: 'text', text: s }); }
+}
+// 从 stderr 尾巴里挑一条最有用的报错行
+function pickErr(s) {
+  if (!s) return '';
+  const lines = s.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+  const key = [...lines].reverse().find(l => /(error|invalid|unauthor|forbidden|denied|not\s*found|enoent|api[\s_-]*key|token|model|quota|rate\s*limit|fail|拒绝|无效|未登录|超时)/i.test(l));
+  return (key || lines[lines.length - 1] || '').slice(0, 300);
+}
 function finishTurn(e, aborted) {
+  flushText(e);
+  if (e.silentTimer) { clearTimeout(e.silentTimer); e.silentTimer = null; }
   if (!e.run) { send('engine-done', { convId: e.convId, aborted: !!aborted }); return; }
   flushAssistant(e);
   const convId = e.run.convId;
   const resultText = e.run.resultText || '';
   appendMessages(convId, e.run.pending);
-  e.run = null; e.busy = false;
+  e.run = null; e.busy = false; e.lastUsed = Date.now();
   let reload = false;
   if (!aborted) {
     const cur = JSON.stringify(buildMcpServersObj(e.allow, e.isEvolve));
@@ -322,7 +416,10 @@ function engineSend(convId, prompt) {
   if (!e) { openEngine(convId); e = engines.get(convId); }
   if (!e || !e.proc) { send('engine-event', { convId, kind: 'system', text: '引擎未启动。' }); return; }
   e.busy = true;
+  e.lastUsed = Date.now(); lastViewedConv = convId; e.gotOutput = false;
   e.run = { convId, pending: [{ type: 'user', text: prompt }], accText: '' };
+  if (e.silentTimer) clearTimeout(e.silentTimer);
+  e.silentTimer = setTimeout(() => { if (e.busy && !e.gotOutput) send('engine-event', { convId, kind: 'system', text: '⏳ 已等待 60 秒仍无响应(可能在等网络/工具)。如卡住可按 ⏹ 中断。' }); }, 60000);
   const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n';
   try { e.proc.stdin.write(payload); } catch (err) { send('engine-event', { convId, kind: 'system', text: '写入失败: ' + err.message }); finishTurn(e, true); }
 }
@@ -551,12 +648,12 @@ function createWindow() {
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
-app.whenReady().then(() => { try { saveMcp(loadMcp()); } catch {} createWindow(); watchEvolveSignal(); app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); }); });
-app.on('window-all-closed', () => { stopLoop(); stopWorkflow(); killAllEngines(); if (process.platform !== 'darwin') app.quit(); });
+app.whenReady().then(() => { try { saveMcp(loadMcp()); } catch {} createWindow(); watchEvolveSignal(); setInterval(reapEngines, 60 * 1000); app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); }); });
+app.on('window-all-closed', () => { flushConvs(); stopLoop(); stopWorkflow(); killAllEngines(); if (process.platform !== 'darwin') app.quit(); });
 
 // ===================== IPC =====================
 ipcMain.on('run-prompt', (_e, { conversationId, prompt }) => engineSend(conversationId, String(prompt || '')));
-ipcMain.on('engine-open', (_e, convId) => { if (convId) openEngine(convId); });
+ipcMain.on('engine-open', (_e, convId) => { if (convId) { lastViewedConv = convId; openEngine(convId); } });
 // 中断/引导:杀掉这一对话当前的 claude 子进程(它会触发 finishTurn(aborted),把已收到的中间结果存盘),
 // 用户可立即接着输入新方向 —— 下一次 send 会用 --resume 拉同一个 session 继续。
 ipcMain.on('engine-stop', (_e, convId) => { if (convId) killEngine(convId); });
@@ -771,4 +868,4 @@ ipcMain.on('cli:resize', (_e, { sessionId, cols, rows }) => {
 });
 ipcMain.on('cli:close', (_e, { sessionId }) => ptyKill(sessionId || 'main'));
 
-app.on('before-quit', () => { for (const id of Array.from(ptys.keys())) ptyKill(id); });
+app.on('before-quit', () => { flushConvs(); for (const id of Array.from(ptys.keys())) ptyKill(id); });

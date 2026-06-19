@@ -165,6 +165,9 @@ $('evolve-rollback').addEventListener('click', async () => {
 
 // ===================== 对话渲染 =====================
 const logEl = $('log');
+// 滚动节流:流式文本一来就 scrollTop=scrollHeight 会反复触发重排;用 rAF 合并到每帧一次
+let _scrollQueued = false;
+function scrollLog() { if (_scrollQueued) return; _scrollQueued = true; requestAnimationFrame(() => { _scrollQueued = false; logEl.scrollTop = logEl.scrollHeight; }); }
 function renderMessages(msgs, kind) {
   logEl.innerHTML = ''; assistantBodyEl = null;
   if (!msgs || !msgs.length) {
@@ -189,7 +192,7 @@ function buildMsgEl(m) {
   const d = document.createElement('div'); d.className = 'sys-line'; d.textContent = m.text || ''; return d;
 }
 function ensureWrap() { let w = logEl.querySelector('.msg-wrap'); if (!w) { logEl.innerHTML = ''; w = document.createElement('div'); w.className = 'msg-wrap'; logEl.appendChild(w); } return w; }
-function appendLive(m) { if (logEl.querySelector('.welcome')) logEl.innerHTML = ''; ensureWrap().appendChild(buildMsgEl(m)); logEl.scrollTop = logEl.scrollHeight; }
+function appendLive(m) { if (logEl.querySelector('.welcome')) logEl.innerHTML = ''; ensureWrap().appendChild(buildMsgEl(m)); scrollLog(); }
 
 // 对话区内嵌的"思考中"气泡(终端风格小圈 + 文案),由 setBusy / hideState 同步驱动
 function showThinkingInChat(text) {
@@ -212,6 +215,7 @@ const inputEl = $('input'), sendBtn = $('send');
 const autoBtn = $('auto-toggle');
 let loopMode = false;   // 开关:把输入当「目标」交给 agent loop
 let looping = false;    // 正在循环中(= loopingConvs.has(currentConvId))
+let pendingGuide = null; // 生成中用户又发的「新方向」:中断当前一轮后自动续发(同一 session)
 const LOOP_MAX = 6;     // 最多轮数
 const LOOP_REVIEWER = true; // 三角色:含审查员
 const PH_DEFAULT = '给 Claude 发消息……(Enter 发送,Shift+Enter 换行,生成中按 Esc 中断引导)';
@@ -287,7 +291,16 @@ function endLoopUI() {
 
 async function sendPrompt() {
   const text = inputEl.value.trim();
-  if (!text || busy || looping) return;
+  if (!text) return;
+  // 普通生成中又发消息 = 立刻中断当前一轮,并把这条作为「新方向」续接发出(同一 session,不丢上下文)
+  if (busy && !looping && !wfRunning) {
+    pendingGuide = text;
+    inputEl.value = ''; inputEl.style.height = 'auto';
+    appendLive({ type: 'system', text: '⏹ 正在中断当前回答,马上按你的新方向继续……' });
+    stopCurrent();
+    return;
+  }
+  if (looping || wfRunning) return; // 循环 / 工作流进行中:用 ⏹ 停止,不在此插入普通消息
   if (!currentConvId) await newConversation();
   appendLive({ type: 'user', text });
   inputEl.value = ''; inputEl.style.height = 'auto'; assistantBodyEl = null;
@@ -326,7 +339,7 @@ window.agent.onEvent((d) => {
         hideThinkingInChat(); // 真实回复来了,撤掉"思考中"气泡
         const w = ensureWrap(); const el = document.createElement('div'); el.className = 'msg assistant'; el.innerHTML = '<div class="who">Claude</div><div class="body"></div>'; w.appendChild(el); assistantBodyEl = el.querySelector('.body');
       }
-      assistantBodyEl.textContent += d.text; logEl.scrollTop = logEl.scrollHeight; break;
+      assistantBodyEl.textContent += d.text; scrollLog(); break;
     case 'tool': assistantBodyEl = null; hideThinkingInChat(); appendLive({ type: 'tool', name: d.name, input: d.input }); break;
     case 'tool_result': appendLive({ type: 'tool_result', text: d.text }); break;
     case 'system': appendLive({ type: 'system', text: d.text }); break;
@@ -343,7 +356,14 @@ window.agent.onDone((d) => {
   syncFromCurrent();
   refreshSendUI();
   hideState();
-  if (d && d.aborted) appendLive({ type: 'system', text: '⏹ 已中断。直接输入新方向继续(会用同一 session 续接)。' });
+  // 中断收尾后,若有挂起的「新方向」→ 自动按它续接;否则提示用户可直接输入新方向
+  if (pendingGuide && !busy && !looping) {
+    const g = pendingGuide; pendingGuide = null;
+    inputEl.value = g;
+    setTimeout(sendPrompt, 30);
+  } else if (d && d.aborted) {
+    appendLive({ type: 'system', text: '⏹ 已中断。直接输入新方向继续(会用同一 session 续接)。' });
+  }
 });
 
 // Agent Loop 进度事件
