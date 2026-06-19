@@ -4,8 +4,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('agent', {
   run: (conversationId, prompt) => ipcRenderer.send('run-prompt', { conversationId, prompt }),
   open: (conversationId) => ipcRenderer.send('engine-open', conversationId), // 预热
+  stop: (conversationId) => ipcRenderer.send('engine-stop', conversationId), // 中断当前一轮(用于「暂停 / 引导」)
   loopRun: (convId, goal, maxIter, withReviewer) => ipcRenderer.send('loop:run', { convId, goal, maxIter, withReviewer }),
-  loopStop: () => ipcRenderer.send('loop:stop'),
+  loopStop: (convId) => ipcRenderer.send('loop:stop', convId || null),
   onEvent: (cb) => ipcRenderer.on('engine-event', (_e, d) => cb(d)),
   onDone: (cb) => ipcRenderer.on('engine-done', (_e, d) => cb(d)),
   onStatus: (cb) => ipcRenderer.on('engine-status', (_e, d) => cb(d)),

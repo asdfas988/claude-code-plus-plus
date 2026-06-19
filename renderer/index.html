@@ -95,6 +95,25 @@
       border: 1px solid var(--border); padding: 4px 11px; border-radius: 20px; white-space: nowrap;
       max-width: 280px; overflow: hidden; text-overflow: ellipsis;
     }
+    /* 终端风格思考小圈 */
+    #engine-state.busy { display: inline-flex !important; align-items: center; gap: 7px; }
+    .spinner {
+      width: 11px; height: 11px; border-radius: 50%;
+      border: 2px solid var(--accent-soft);
+      border-top-color: var(--accent);
+      animation: spin .7s linear infinite;
+      flex: none;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 1.6s; } }
+    /* 对话区内嵌的思考气泡 */
+    .thinking-msg .thinking-bubble {
+      display: inline-flex; align-items: center; gap: 9px;
+      color: var(--muted); font-size: 13px; font-style: italic;
+    }
+    .thinking-msg .thinking-bubble .spinner {
+      width: 13px; height: 13px;
+    }
 
     .page { flex: 1; display: none; flex-direction: column; min-height: 0; }
     .page.active { display: flex; }
@@ -129,6 +148,8 @@
     }
     #send:hover { background: var(--accent-press); }
     #send:disabled { background: #d8d3c6; cursor: not-allowed; }
+    #send.stop { background: #c0392b; }
+    #send.stop:hover { background: #a02f23; }
     .auto-btn { flex: none; align-self: stretch; background: var(--panel); border: 1px solid var(--border); color: var(--muted); border-radius: 12px; padding: 0 12px; font-size: 13px; font-weight: 600; white-space: nowrap; }
     .auto-btn:hover { border-color: var(--accent); color: var(--accent-press); }
     .auto-btn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-press); }

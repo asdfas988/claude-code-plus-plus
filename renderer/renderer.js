@@ -7,6 +7,13 @@ let currentConvId = null;
 let convCache = [];
 let assistantBodyEl = null;
 let busy = false;
+// 每个对话独立追踪是否在跑/在循环。busy/looping 始终等于这两个集合对当前对话的查询结果。
+const busyConvs = new Set();
+const loopingConvs = new Set();
+function syncFromCurrent() {
+  busy = currentConvId ? busyConvs.has(currentConvId) : false;
+  looping = currentConvId ? loopingConvs.has(currentConvId) : false;
+}
 
 // ===================== 页面导航 =====================
 const pages = { chat: $('page-chat'), providers: $('page-providers'), plugins: $('page-plugins'), agents: $('page-agents'), workflows: $('page-workflows'), skills: $('page-skills'), terminal: $('page-terminal') };
@@ -28,10 +35,36 @@ function currentTitle() { const c = convCache.find(x => x.id === currentConvId);
 
 // ===================== 引擎状态指示 =====================
 const stateEl = $('engine-state');
+// 带旋转小圈的忙碌态(终端风格);同时在对话区里挂一个"Claude 思考中…"气泡。
+// inChat=false 时只动顶栏(用于预热这种非用户触发的状态,避免给空对话凭空塞气泡)
+function setBusy(text, inChat = true) {
+  stateEl.style.display = '';
+  stateEl.classList.add('busy');
+  stateEl.innerHTML = '<span class="spinner"></span><span></span>';
+  stateEl.lastChild.textContent = text;
+  if (inChat) showThinkingInChat(text); else hideThinkingInChat();
+}
+// 不带圈的静态状态(就绪/完成提示等)
+function setIdle(text) {
+  stateEl.style.display = '';
+  stateEl.classList.remove('busy');
+  stateEl.textContent = text;
+  hideThinkingInChat();
+}
+function hideState() {
+  stateEl.classList.remove('busy');
+  stateEl.style.display = 'none';
+  stateEl.textContent = '';
+  hideThinkingInChat();
+}
 window.agent.onStatus((d) => {
   if (d.convId !== currentConvId) return;
-  if (d.state === 'warming') { stateEl.style.display = ''; stateEl.textContent = '⏳ 预热中…'; }
-  else if (d.state === 'ready') { stateEl.style.display = ''; stateEl.textContent = '🟢 就绪'; setTimeout(() => { if (!busy) stateEl.style.display = 'none'; }, 1500); }
+  // 不再有 warming —— claude -p stream-json 要等 stdin 第一条消息才回 init,
+  // 提前发 warming 会让 UI 永远卡在"预热中…"。ready 也只是过场,不忙时一闪而过。
+  if (d.state === 'ready' && !busy && !looping) {
+    setIdle('🟢 就绪');
+    setTimeout(() => { if (!busy && !looping) hideState(); }, 1200);
+  }
 });
 
 // ===================== 侧栏 · 对话 + 插件 两栏 =====================
@@ -73,13 +106,30 @@ async function openConv(id) {
   $('top-title').textContent = (conv && conv.title) || (currentConvKind === 'plugin' ? '新插件' : '新对话');
   syncAgentPicker(conv ? conv.agentId : null, currentConvKind);
   renderMessages(conv ? conv.messages : [], currentConvKind);
+  assistantBodyEl = null;
+  // 切换对话 → 把 UI 同步到这条对话自己的状态(忙/在循环/或空闲)
+  loopMode = false;
+  inputEl.placeholder = PH_DEFAULT;
+  syncFromCurrent();
+  refreshSendUI();
+  if (looping) setBusy('Agent Loop 运行中…');
+  else if (busy) setBusy('思考中…');
+  else hideState();
   window.agent.open(id);
+}
+function resetChatUIForFreshConv() {
+  assistantBodyEl = null;
+  loopMode = false; inputEl.placeholder = PH_DEFAULT;
+  syncFromCurrent();
+  refreshSendUI();
+  hideState();
 }
 async function newConversation() {
   const r = await window.conv.create('chat');
   convCache = r.conversations; currentConvId = r.conv.id; currentConvKind = 'chat';
   showPage('chat'); renderSidebar();
   $('top-title').textContent = '新对话'; syncAgentPicker(null, 'chat'); renderMessages([], 'chat');
+  resetChatUIForFreshConv();
   window.agent.open(currentConvId);
   $('input').focus();
 }
@@ -88,6 +138,7 @@ async function newPlugin() {
   convCache = r.conversations; currentConvId = r.conv.id; currentConvKind = 'plugin';
   showPage('chat'); renderSidebar();
   $('top-title').textContent = '新插件'; syncAgentPicker(null, 'plugin'); renderMessages([], 'plugin');
+  resetChatUIForFreshConv();
   window.agent.open(currentConvId);
   $('input').focus();
 }
@@ -99,6 +150,7 @@ async function openEvolve() {
   convCache = r.conversations; currentConvId = r.conv.id; currentConvKind = 'evolve';
   showPage('chat'); renderSidebar();
   $('top-title').textContent = '自我进化'; syncAgentPicker(null, 'evolve'); renderMessages([], 'evolve');
+  resetChatUIForFreshConv();
   window.agent.open(currentConvId);
   $('input').focus();
 }
@@ -139,26 +191,80 @@ function buildMsgEl(m) {
 function ensureWrap() { let w = logEl.querySelector('.msg-wrap'); if (!w) { logEl.innerHTML = ''; w = document.createElement('div'); w.className = 'msg-wrap'; logEl.appendChild(w); } return w; }
 function appendLive(m) { if (logEl.querySelector('.welcome')) logEl.innerHTML = ''; ensureWrap().appendChild(buildMsgEl(m)); logEl.scrollTop = logEl.scrollHeight; }
 
+// 对话区内嵌的"思考中"气泡(终端风格小圈 + 文案),由 setBusy / hideState 同步驱动
+function showThinkingInChat(text) {
+  hideThinkingInChat();
+  if (logEl.querySelector('.welcome')) logEl.innerHTML = '';
+  const w = ensureWrap();
+  const d = document.createElement('div');
+  d.className = 'msg assistant thinking-msg';
+  d.innerHTML = '<div class="who">Claude</div><div class="thinking-bubble"><span class="spinner"></span><span class="t-txt"></span></div>';
+  d.querySelector('.t-txt').textContent = text;
+  w.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function hideThinkingInChat() {
+  logEl.querySelectorAll('.thinking-msg').forEach(e => e.remove());
+}
+
 // ===================== 发送 + Agent Loop =====================
 const inputEl = $('input'), sendBtn = $('send');
 const autoBtn = $('auto-toggle');
 let loopMode = false;   // 开关:把输入当「目标」交给 agent loop
-let looping = false;    // 正在循环中
+let looping = false;    // 正在循环中(= loopingConvs.has(currentConvId))
 const LOOP_MAX = 6;     // 最多轮数
 const LOOP_REVIEWER = true; // 三角色:含审查员
-const PH_DEFAULT = '给 Claude 发消息……(Enter 发送,Shift+Enter 换行)';
+const PH_DEFAULT = '给 Claude 发消息……(Enter 发送,Shift+Enter 换行,生成中按 Esc 中断引导)';
 const PH_LOOP = '输入一个【目标】(最好带可验证的完成标准)……我会自己循环推进直到达成';
+const SEND_DEFAULT = '↑';
+
+// 按钮状态根据 busy/looping/loopMode 同步;不再用 disabled 锁送,而是在忙时变 ⏹ 停止
+function refreshSendUI() {
+  if (looping) {
+    sendBtn.textContent = '⏹';
+    sendBtn.title = '停止 Agent Loop';
+    sendBtn.classList.add('stop');
+    sendBtn.disabled = false;
+    autoBtn.textContent = '⏹ 停止循环';
+    autoBtn.classList.add('looping');
+    autoBtn.classList.remove('on');
+  } else if (busy) {
+    sendBtn.textContent = '⏹';
+    sendBtn.title = '中断当前一轮(已收到的内容会保留,可立即输入新方向)';
+    sendBtn.classList.add('stop');
+    sendBtn.disabled = false;
+    autoBtn.textContent = '🔁 Loop';
+    autoBtn.classList.remove('looping');
+    autoBtn.classList.toggle('on', loopMode);
+  } else {
+    sendBtn.textContent = SEND_DEFAULT;
+    sendBtn.title = '发送';
+    sendBtn.classList.remove('stop');
+    sendBtn.disabled = false;
+    autoBtn.textContent = '🔁 Loop';
+    autoBtn.classList.remove('looping');
+    autoBtn.classList.toggle('on', loopMode);
+  }
+}
+function stopCurrent() {
+  if (wfRunning) { window.workflows.stop(); return; }
+  if (!currentConvId) return;
+  if (looping) window.agent.loopStop(currentConvId);
+  else if (busy) window.agent.stop(currentConvId);
+}
 
 autoBtn.addEventListener('click', () => {
-  if (looping) { window.agent.loopStop(); return; } // 循环中再点 = 停止
+  if (looping) { window.agent.loopStop(currentConvId); return; } // 循环中再点 = 停止
+  if (busy) return; // 在跑普通对话时不让切模式,避免歧义
   loopMode = !loopMode;
-  autoBtn.classList.toggle('on', loopMode);
+  refreshSendUI();
   inputEl.placeholder = loopMode ? PH_LOOP : PH_DEFAULT;
 });
 
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function appendLoopCard(cls, head, rows) {
   if (logEl.querySelector('.welcome')) logEl.innerHTML = '';
+  hideThinkingInChat(); // 真实内容来了,撤掉思考气泡(下一个 busy 会再加一个新的)
   const w = ensureWrap();
   const d = document.createElement('div'); d.className = 'loop-card' + (cls ? ' ' + cls : '');
   let html = '<div class="lc-head">' + head + '</div>';
@@ -171,9 +277,12 @@ function appendIter(n, max) {
   d.innerHTML = '<span>第 ' + n + ' / ' + max + ' 轮</span>'; w.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
 }
 function endLoopUI() {
-  looping = false; busy = false; sendBtn.disabled = false; assistantBodyEl = null;
-  autoBtn.classList.remove('looping', 'on'); autoBtn.textContent = '🔁 Loop';
-  loopMode = false; inputEl.placeholder = PH_DEFAULT; stateEl.style.display = 'none';
+  if (currentConvId) { loopingConvs.delete(currentConvId); busyConvs.delete(currentConvId); }
+  syncFromCurrent();
+  assistantBodyEl = null;
+  loopMode = false; inputEl.placeholder = PH_DEFAULT;
+  refreshSendUI();
+  hideState();
 }
 
 async function sendPrompt() {
@@ -182,28 +291,43 @@ async function sendPrompt() {
   if (!currentConvId) await newConversation();
   appendLive({ type: 'user', text });
   inputEl.value = ''; inputEl.style.height = 'auto'; assistantBodyEl = null;
+  busyConvs.add(currentConvId);
   if (loopMode) {
-    looping = true; busy = true; sendBtn.disabled = true;
-    autoBtn.classList.remove('on'); autoBtn.classList.add('looping'); autoBtn.textContent = '⏹ 停止';
-    stateEl.style.display = ''; stateEl.textContent = '🔁 Agent Loop 运行中…';
+    loopingConvs.add(currentConvId);
+    looping = true; busy = true;
+    refreshSendUI();
+    setBusy('Agent Loop 运行中…');
     window.agent.loopRun(currentConvId, text, LOOP_MAX, LOOP_REVIEWER);
   } else {
-    busy = true; sendBtn.disabled = true;
-    stateEl.style.display = ''; stateEl.textContent = '💭 思考中…';
+    busy = true;
+    refreshSendUI();
+    setBusy('思考中…');
     window.agent.run(currentConvId, text);
   }
 }
-sendBtn.addEventListener('click', sendPrompt);
-inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendPrompt(); } });
+sendBtn.addEventListener('click', () => {
+  if (busy || looping) { stopCurrent(); return; }
+  sendPrompt();
+});
+inputEl.addEventListener('keydown', (e) => {
+  // Esc:在生成 / 循环中按下立刻中断,落地到一个干净状态,再键入即可"引导"它(下次 send 会 --resume 同一 session)
+  if (e.key === 'Escape' && (busy || looping)) { e.preventDefault(); stopCurrent(); return; }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendPrompt(); }
+});
 inputEl.addEventListener('input', () => { inputEl.style.height = 'auto'; inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + 'px'; });
 
 window.agent.onEvent((d) => {
-  if (d.convId && d.convId !== currentConvId) return; // 忽略非当前对话
+  // 任何一条引擎事件 = 那个对话正在跑 → 记到 busyConvs,这样切回去时 UI 还原得了
+  if (d.convId) busyConvs.add(d.convId);
+  if (d.convId && d.convId !== currentConvId) return; // 忽略非当前对话(仅追踪状态)
   switch (d.kind) {
     case 'text':
-      if (!assistantBodyEl) { const w = ensureWrap(); const el = document.createElement('div'); el.className = 'msg assistant'; el.innerHTML = '<div class="who">Claude</div><div class="body"></div>'; w.appendChild(el); assistantBodyEl = el.querySelector('.body'); }
+      if (!assistantBodyEl) {
+        hideThinkingInChat(); // 真实回复来了,撤掉"思考中"气泡
+        const w = ensureWrap(); const el = document.createElement('div'); el.className = 'msg assistant'; el.innerHTML = '<div class="who">Claude</div><div class="body"></div>'; w.appendChild(el); assistantBodyEl = el.querySelector('.body');
+      }
       assistantBodyEl.textContent += d.text; logEl.scrollTop = logEl.scrollHeight; break;
-    case 'tool': assistantBodyEl = null; appendLive({ type: 'tool', name: d.name, input: d.input }); break;
+    case 'tool': assistantBodyEl = null; hideThinkingInChat(); appendLive({ type: 'tool', name: d.name, input: d.input }); break;
     case 'tool_result': appendLive({ type: 'tool_result', text: d.text }); break;
     case 'system': appendLive({ type: 'system', text: d.text }); break;
     case 'result': assistantBodyEl = null; break;
@@ -211,24 +335,35 @@ window.agent.onEvent((d) => {
 });
 window.agent.onDone((d) => {
   if (d && d.conversations) { convCache = d.conversations; renderSidebar(); const c = convCache.find(x => x.id === currentConvId); if (c) $('top-title').textContent = c.title || (c.kind === 'plugin' ? '新插件' : '新对话'); }
+  if (d && d.convId) busyConvs.delete(d.convId);
+  // 非当前对话完成 → 别动 UI
+  if (d && d.convId && d.convId !== currentConvId) return;
   assistantBodyEl = null;
-  if (looping) { stateEl.style.display = ''; stateEl.textContent = '🔁 本轮完成,审查 / 验收中…'; return; } // 循环中不解锁,交给 loop 事件
-  busy = false; sendBtn.disabled = false; stateEl.style.display = 'none';
+  if (looping) { setBusy('本轮完成,审查 / 验收中…'); return; } // 循环中不解锁,交给 loop 事件
+  syncFromCurrent();
+  refreshSendUI();
+  hideState();
+  if (d && d.aborted) appendLive({ type: 'system', text: '⏹ 已中断。直接输入新方向继续(会用同一 session 续接)。' });
 });
 
 // Agent Loop 进度事件
 window.agent.onLoop((d) => {
+  // 先维护 per-conv 状态集合,再决定要不要动当前 UI
+  if (d.convId) {
+    if (d.kind === 'start') loopingConvs.add(d.convId);
+    if (d.kind === 'done' || d.kind === 'error') loopingConvs.delete(d.convId);
+  }
   if (d.convId && d.convId !== currentConvId) return;
   switch (d.kind) {
     case 'start':
       appendLoopCard('', '🔁 Agent Loop 启动', ['🎯 目标:' + esc(d.goal), '最多 ' + d.maxIter + ' 轮 · ' + (d.withReviewer ? '审查员 + 验收员把关' : '仅验收员把关')]);
       appendIter(1, d.maxIter); break;
-    case 'reviewing': stateEl.style.display = ''; stateEl.textContent = '🔍 审查员独立审查本轮…'; break;
+    case 'reviewing': setBusy('审查员独立审查本轮…'); break;
     case 'review': appendLoopCard('', '🔍 审查员意见(独立上下文)', [esc(d.text)]); break;
-    case 'grading': stateEl.style.display = ''; stateEl.textContent = '⚖️ 验收员独立核实是否达成…'; break;
+    case 'grading': setBusy('验收员独立核实是否达成…'); break;
     case 'verdict':
       appendLoopCard(d.met ? 'pass' : 'fail', (d.met ? '✅ 验收通过' : '❌ 验收未通过') + (d.score ? ' · ' + d.score + ' 分' : ''), ['验收员:' + esc(d.feedback)]); break;
-    case 'next': appendIter(d.iter, LOOP_MAX); stateEl.style.display = ''; stateEl.textContent = '🔁 第 ' + d.iter + ' 轮推进中…'; break;
+    case 'next': appendIter(d.iter, LOOP_MAX); setBusy('第 ' + d.iter + ' 轮推进中…'); break;
     case 'done':
       appendLoopCard(d.met ? 'pass' : 'fail', d.met ? '🎉 目标达成,循环结束' : (d.reason === 'stopped' ? '⏹ 已手动停止循环' : '🛑 已达最大轮数(' + (d.iter || LOOP_MAX) + ' 轮)仍未达成,停止'), []);
       endLoopUI(); break;
@@ -451,8 +586,9 @@ async function runWorkflowFlow(w) {
   if (!currentConvId) await newConversation();
   showPage('chat');
   appendLive({ type: 'user', text: '▶ 运行工作流「' + w.name + '」\n输入:' + (input || '(无)') });
-  wfRunning = true; busy = true; sendBtn.disabled = true;
-  stateEl.style.display = ''; stateEl.textContent = '👥 工作流运行中…';
+  wfRunning = true; busy = true;
+  refreshSendUI();
+  setBusy('工作流运行中…');
   window.workflows.run(currentConvId, w.id, input);
 }
 
@@ -464,9 +600,10 @@ window.workflows.onEvent((d) => {
   if (d.convId && d.convId !== currentConvId) return;
   switch (d.kind) {
     case 'start': appendWfStage((d.emoji || '🧩') + ' ' + d.name + ' · 共 ' + d.stages + ' 阶段'); break;
-    case 'stage': appendWfStage('阶段 ' + (d.index + 1) + '/' + d.total + ':' + d.name + (d.parallel ? ' ⇉ 并行' : '') + ' · ' + d.count + ' 个任务'); stateEl.textContent = '👥 ' + d.name + ' 进行中…'; break;
+    case 'stage': appendWfStage('阶段 ' + (d.index + 1) + '/' + d.total + ':' + d.name + (d.parallel ? ' ⇉ 并行' : '') + ' · ' + d.count + ' 个任务'); setBusy(d.name + ' 进行中…'); break;
     case 'task-start': {
       if (logEl.querySelector('.welcome')) logEl.innerHTML = '';
+      hideThinkingInChat(); // 子任务卡片自带"执行中…"状态,撤掉通用思考气泡免得重复
       const w = ensureWrap(); const el = document.createElement('div'); el.className = 'wf-run-task running';
       el.innerHTML = '<div class="wt-h">' + escapeHtml(d.agent) + ' · 执行中…</div>';
       w.appendChild(el); wfTaskEls[wfTaskKey(d.stage, d.task)] = el; logEl.scrollTop = logEl.scrollHeight; break;
@@ -478,10 +615,10 @@ window.workflows.onEvent((d) => {
     }
     case 'done':
       appendWfStage(d.stopped ? '⏹ 工作流已停止' : '🎉 工作流完成');
-      wfRunning = false; busy = false; sendBtn.disabled = false; stateEl.style.display = 'none'; break;
+      wfRunning = false; busy = false; refreshSendUI(); hideState(); break;
     case 'error':
       appendLive({ type: 'system', text: '⚠️ 工作流出错:' + d.text });
-      wfRunning = false; busy = false; sendBtn.disabled = false; stateEl.style.display = 'none'; break;
+      wfRunning = false; busy = false; refreshSendUI(); hideState(); break;
   }
 });
 
